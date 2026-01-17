@@ -8,6 +8,8 @@ import os
 from dotenv import load_dotenv
 import json
 import requests
+from newspaper import Article
+from bs4 import BeautifulSoup
 
 # Load environment variables
 load_dotenv()
@@ -43,6 +45,8 @@ class NewsArticle(BaseModel):
     source: str
     snippet: Optional[str] = None
     date: Optional[str] = None
+    content: Optional[str] = None
+    image: Optional[str] = None
 
 class PersonalizedNewsResponse(BaseModel):
     recommended_interests: List[str] = Field(..., description="Top K interests selected")
@@ -52,9 +56,27 @@ class PersonalizedNewsResponse(BaseModel):
 async def health_check():
     return JSONResponse(content={"status": "healthy"}, status_code=200)
 
+def scrape_article_content(url: str) -> tuple[Optional[str], Optional[str]]:
+    """
+    Scrape the full article content and image from a URL using newspaper3k.
+    Returns (content, image_url)
+    """
+    try:
+        article = Article(url)
+        article.download()
+        article.parse()
+        
+        content = article.text if article.text else None
+        image = article.top_image if article.top_image else None
+        
+        return content, image
+    except Exception as e:
+        print(f"Error scraping article {url}: {str(e)}")
+        return None, None
+
 def fetch_news_for_interest(interest: str, num_results: int = 5) -> List[NewsArticle]:
     """
-    Fetch news articles for a specific interest using SERP API.
+    Fetch news articles for a specific interest using SERP API and scrape full content.
     """
     if not serp_api_key:
         return []
@@ -75,12 +97,20 @@ def fetch_news_for_interest(interest: str, num_results: int = 5) -> List[NewsArt
         news_results = data.get("news_results", [])
         
         for item in news_results[:num_results]:
+            # Get basic info from SERP API
+            link = item.get("link", "")
+            
+            # Scrape full article content
+            content, image = scrape_article_content(link)
+            
             article = NewsArticle(
                 title=item.get("title", ""),
-                link=item.get("link", ""),
+                link=link,
                 source=item.get("source", {}).get("name", "Unknown") if isinstance(item.get("source"), dict) else item.get("source", "Unknown"),
                 snippet=item.get("snippet", ""),
-                date=item.get("date", "")
+                date=item.get("date", ""),
+                content=content,
+                image=image
             )
             articles.append(article)
         
