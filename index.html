@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Personalized News</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>📰 Your Personalized News Feed</h1>
+        
+        <form id="newsForm">
+            <div class="form-group">
+                <label>Age</label>
+                <input type="number" id="age" min="13" max="100" value="28" required>
+            </div>
+
+            <div class="form-group">
+                <label>Goals</label>
+                <input type="text" id="goals" placeholder="e.g., Build a startup, stay healthy" value="Scale my startup and run a marathon" required>
+            </div>
+
+            <div class="form-group">
+                <label>Select Your Interests (choose at least 3)</label>
+                <div class="interests-grid">
+                    <label class="interest-item">
+                        <input type="checkbox" name="interest" value="coding">
+                        <span>💻 Coding</span>
+                    </label>
+                    <label class="interest-item">
+                        <input type="checkbox" name="interest" value="technology">
+                        <span>🔧 Technology</span>
+                    </label>
+                    <label class="interest-item">
+                        <input type="checkbox" name="interest" value="cloud architecture">
+                        <span>☁️ Cloud</span>
+                    </label>
+                    <label class="interest-item">
+                        <input type="checkbox" name="interest" value="ai">
+                        <span>🤖 AI</span>
+                    </label>
+                    <label class="interest-item">
+                        <input type="checkbox" name="interest" value="fitness">
+                        <span>💪 Fitness</span>
+                    </label>
+                    <label class="interest-item">
+                        <input type="checkbox" name="interest" value="health">
+                        <span>🏥 Health</span>
+                    </label>
+                    <label class="interest-item">
+                        <input type="checkbox" name="interest" value="yoga">
+                        <span>🧘 Yoga</span>
+                    </label>
+                    <label class="interest-item">
+                        <input type="checkbox" name="interest" value="meditation">
+                        <span>🧠 Meditation</span>
+                    </label>
+                    <label class="interest-item">
+                        <input type="checkbox" name="interest" value="startup">
+                        <span>🚀 Startup</span>
+                    </label>
+                    <label class="interest-item">
+                        <input type="checkbox" name="interest" value="business">
+                        <span>💼 Business</span>
+                    </label>
+                    <label class="interest-item">
+                        <input type="checkbox" name="interest" value="stock trading">
+                        <span>📈 Trading</span>
+                    </label>
+                    <label class="interest-item">
+                        <input type="checkbox" name="interest" value="finance">
+                        <span>💰 Finance</span>
+                    </label>
+                    <label class="interest-item">
+                        <input type="checkbox" name="interest" value="cooking">
+                        <span>🍳 Cooking</span>
+                    </label>
+                    <label class="interest-item">
+                        <input type="checkbox" name="interest" value="gaming">
+                        <span>🎮 Gaming</span>
+                    </label>
+                    <label class="interest-item">
+                        <input type="checkbox" name="interest" value="travel">
+                        <span>✈️ Travel</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Top Interests to Show (k)</label>
+                <input type="number" id="k" min="1" max="5" value="3" required>
+            </div>
+
+            <button type="submit" class="btn-submit">Get My News</button>
+        </form>
+
+        <div id="loading" class="loading hidden">
+            <div class="spinner"></div>
+            <p>Finding your personalized news...</p>
+        </div>
+
+        <div id="error" class="error hidden"></div>
+
+        <div id="results" class="results hidden">
+            <h2>🎯 Your Top Interests</h2>
+            <div id="topInterests" class="top-interests"></div>
+
+            <div id="newsContainer"></div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
