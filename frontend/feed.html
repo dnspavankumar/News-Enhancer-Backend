@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Your News Feed</title>
+    <link rel="stylesheet" href="feed.css">
+</head>
+<body>
+    <div class="header">
+        <div class="header-content">
+            <h1>📰 Your Personalized News Feed</h1>
+            <div class="header-actions">
+                <span class="user-email" id="userEmail"></span>
+                <button class="btn-refresh" onclick="refreshFeed()">🔄 Refresh</button>
+                <button class="btn-settings" onclick="showSettings()">⚙️ Settings</button>
+                <button class="btn-logout" onclick="logout()">Logout</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <div id="topInterests" class="top-interests hidden">
+            <h2>🎯 Your Top Interests</h2>
+            <div id="interestsList" class="interests-list"></div>
+        </div>
+
+        <div id="loading" class="loading">
+            <div class="spinner"></div>
+            <p>Loading your personalized news...</p>
+        </div>
+
+        <div id="error" class="error hidden"></div>
+
+        <div id="newsContainer"></div>
+
+        <div id="refreshInfo" class="refresh-info hidden">
+            <p>🔄 Auto-refresh in <span id="countdown">300</span> seconds</p>
+            <p style="margin-top: 5px; font-size: 0.85rem;">Last updated: <span id="lastUpdate"></span></p>
+        </div>
+    </div>
+
+    <script src="feed.js"></script>
+</body>
+</html>

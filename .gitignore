@@ -1,2 +1,5 @@
 .env
+news_app.db
+*.db
+firebase-credentials.json
 /.vscode

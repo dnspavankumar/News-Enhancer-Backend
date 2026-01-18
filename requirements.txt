@@ -6,3 +6,7 @@ pydantic
 feedparser
 newspaper3k
 lxml_html_clean
+passlib[bcrypt]
+python-jose[cryptography]
+python-multipart
+firebase-admin

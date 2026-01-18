@@ -1,17 +1,23 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, EmailStr
 from typing import List, Dict, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import google.genai as genai
 import os
 from dotenv import load_dotenv
 import json
-import feedparser
-from newspaper import Article
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
-import hashlib
+
+# Import services
+from services.auth import (
+    get_password_hash, 
+    verify_password, 
+    create_access_token, 
+    get_current_user
+)
+from services.firestore_db import FirestoreUser, FirestoreReadArticle
+from services.news_service import fetch_news_for_interest
 
 # Load environment variables
 load_dotenv()
@@ -29,91 +35,6 @@ app.add_middleware(
 
 # Get API key from environment
 api_key = os.getenv("GEMINI_API_KEY")
-
-# RSS Feed mapping for different interests
-RSS_FEEDS = {
-    # Technology & Programming
-    "coding": [
-        "https://hnrss.org/frontpage",
-        "https://www.reddit.com/r/programming/.rss",
-        "https://dev.to/feed"
-    ],
-    "technology": [
-        "https://techcrunch.com/feed/",
-        "https://www.theverge.com/rss/index.xml",
-        "https://www.wired.com/feed/rss"
-    ],
-    "cloud architecture": [
-        "https://aws.amazon.com/blogs/aws/feed/",
-        "https://cloud.google.com/blog/rss",
-        "https://devblogs.microsoft.com/azure-sdk/feed/"
-    ],
-    "ai": [
-        "https://www.artificialintelligence-news.com/feed/",
-        "https://openai.com/blog/rss.xml"
-    ],
-    
-    # Health & Fitness
-    "fitness": [
-        "https://www.menshealth.com/rss/all.xml/",
-        "https://www.bodybuilding.com/rss/latest-articles.xml"
-    ],
-    "health": [
-        "https://www.health.com/syndication/feed",
-        "https://www.healthline.com/rss"
-    ],
-    "yoga": [
-        "https://www.yogajournal.com/feed/"
-    ],
-    "meditation": [
-        "https://www.mindful.org/feed/"
-    ],
-    
-    # Business & Finance
-    "startup": [
-        "https://techcrunch.com/tag/startups/feed/",
-        "https://www.entrepreneur.com/latest.rss",
-        "https://www.reddit.com/r/startups/.rss"
-    ],
-    "business": [
-        "https://www.businessinsider.com/rss",
-        "https://www.reddit.com/r/business/.rss",
-        "https://hbr.org/feed"
-    ],
-    "stock trading": [
-        "https://www.investopedia.com/feedbuilder/feed/getfeed?feedName=rss_headline",
-        "https://www.marketwatch.com/rss/",
-        "https://www.reddit.com/r/stocks/.rss"
-    ],
-    "finance": [
-        "https://www.cnbc.com/id/100003114/device/rss/rss.html",
-        "https://finance.yahoo.com/news/rssindex",
-        "https://www.reddit.com/r/finance/.rss"
-    ],
-    
-    # Lifestyle
-    "cooking": [
-        "https://www.bonappetit.com/feed/rss",
-        "https://www.seriouseats.com/rss/recipes.xml"
-    ],
-    "gaming": [
-        "https://www.ign.com/feed.xml",
-        "https://www.polygon.com/rss/index.xml"
-    ],
-    "travel": [
-        "https://www.lonelyplanet.com/feed",
-        "https://www.travelandleisure.com/rss"
-    ],
-    
-    # Default fallback
-    "general": [
-        "https://news.google.com/rss",
-        "https://www.reddit.com/r/news/.rss"
-    ]
-}
-
-# Cache for articles (simple in-memory cache)
-article_cache = {}
 
 # Request and Response Models
 class InterestRequest(BaseModel):
@@ -138,165 +59,126 @@ class PersonalizedNewsResponse(BaseModel):
     recommended_interests: List[str] = Field(..., description="Top K interests selected")
     news_by_interest: Dict[str, List[NewsArticle]] = Field(..., description="News articles grouped by interest")
 
+# Authentication Models
+class UserRegister(BaseModel):
+    email: EmailStr
+    password: str = Field(..., min_length=6)
+    age: int = Field(..., ge=13, le=120)
+    goals: str
+    interests: List[str] = Field(..., min_items=3)
+    k: int = Field(default=3, ge=1, le=10)
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+class UserProfile(BaseModel):
+    id: str
+    email: str
+    age: int
+    goals: str
+    interests: List[str]
+    k: int
+
+class UpdateProfile(BaseModel):
+    age: Optional[int] = None
+    goals: Optional[str] = None
+    interests: Optional[List[str]] = None
+    k: Optional[int] = None
+
 @app.get("/health")
 async def health_check():
     return JSONResponse(content={"status": "healthy"}, status_code=200)
 
-def get_cache_key(url: str) -> str:
-    """Generate cache key from URL"""
-    return hashlib.md5(url.encode()).hexdigest()
+# ============= AUTHENTICATION ENDPOINTS =============
 
-def scrape_article_content(url: str, timeout: int = 5) -> tuple[Optional[str], Optional[str]]:
-    """
-    Scrape the full article content and image from a URL using newspaper3k.
-    Returns (content, image_url)
-    """
-    # Check cache first
-    cache_key = get_cache_key(url)
-    if cache_key in article_cache:
-        return article_cache[cache_key]
+@app.post("/auth/register", response_model=Token)
+async def register(user_data: UserRegister):
+    """Register a new user"""
+    # Check if user exists
+    existing_user = FirestoreUser.get_by_email(user_data.email)
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
     
-    try:
-        article = Article(url)
-        
-        # Add user agent to bypass some blocks
-        article.config.browser_user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        article.config.request_timeout = timeout
-        
-        article.download()
-        article.parse()
-        
-        content = article.text[:2000] if article.text else None  # Limit to 2000 chars
-        image = article.top_image if article.top_image else None
-        
-        # Cache the result
-        result = (content, image)
-        article_cache[cache_key] = result
-        
-        return result
-    except Exception as e:
-        # Don't print error for every blocked site (too noisy)
-        if "403" not in str(e) and "404" not in str(e):
-            print(f"Error scraping article {url}: {str(e)}")
-        return None, None
+    # Create new user
+    hashed_password = get_password_hash(user_data.password)
+    new_user = FirestoreUser.create(
+        email=user_data.email,
+        hashed_password=hashed_password,
+        age=user_data.age,
+        goals=user_data.goals,
+        interests=user_data.interests,
+        k=user_data.k
+    )
+    
+    # Create access token
+    access_token = create_access_token(data={"sub": new_user["id"]})
+    
+    return {"access_token": access_token, "token_type": "bearer"}
 
-def find_feeds_for_interest(interest: str) -> List[str]:
-    """
-    Find relevant RSS feeds for a given interest.
-    Uses fuzzy matching to find the best feeds.
-    """
-    interest_lower = interest.lower()
+@app.post("/auth/login", response_model=Token)
+async def login(credentials: UserLogin):
+    """Login user"""
+    user = FirestoreUser.get_by_email(credentials.email)
     
-    # Direct match
-    if interest_lower in RSS_FEEDS:
-        return RSS_FEEDS[interest_lower]
-    
-    # Partial match
-    for key in RSS_FEEDS:
-        if key in interest_lower or interest_lower in key:
-            return RSS_FEEDS[key]
-    
-    # Fallback to general news
-    return RSS_FEEDS["general"]
-
-def fetch_rss_entries(feed_url: str, max_entries: int = 10) -> List[dict]:
-    """
-    Fetch entries from a single RSS feed.
-    """
-    try:
-        feed = feedparser.parse(feed_url)
-        entries = []
-        
-        for entry in feed.entries[:max_entries]:
-            entries.append({
-                "title": entry.get("title", ""),
-                "link": entry.get("link", ""),
-                "summary": entry.get("summary", ""),
-                "published": entry.get("published", ""),
-                "source": feed.feed.get("title", "Unknown")
-            })
-        
-        return entries
-    except Exception as e:
-        print(f"Error fetching RSS feed {feed_url}: {str(e)}")
-        return []
-
-def process_single_article(entry: dict) -> Optional[NewsArticle]:
-    """
-    Process a single RSS entry and scrape its content.
-    """
-    try:
-        # Try to scrape full content
-        content, image = scrape_article_content(entry["link"])
-        
-        # Use RSS summary as fallback if scraping fails
-        if not content and entry.get("summary"):
-            # Clean HTML tags from summary
-            from html import unescape
-            import re
-            summary = entry.get("summary", "")
-            # Remove HTML tags
-            summary = re.sub('<[^<]+?>', '', summary)
-            # Unescape HTML entities
-            summary = unescape(summary)
-            content = summary.strip()
-        
-        # Skip if no content at all
-        if not content or len(content) < 50:
-            return None
-        
-        return NewsArticle(
-            title=entry["title"],
-            link=entry["link"],
-            source=entry["source"],
-            snippet=entry.get("summary", "")[:200] if entry.get("summary") else None,
-            date=entry.get("published", ""),
-            content=content[:2000],  # Limit content length
-            image=image
+    if not user or not verify_password(credentials.password, user["hashed_password"]):
+        raise HTTPException(
+            status_code=401,
+            detail="Incorrect email or password"
         )
-    except Exception as e:
-        print(f"Error processing article {entry.get('link', '')}: {str(e)}")
-        return None
+    
+    # Update last login
+    FirestoreUser.update_last_login(user["id"])
+    
+    # Create access token
+    access_token = create_access_token(data={"sub": user["id"]})
+    
+    return {"access_token": access_token, "token_type": "bearer"}
 
-def fetch_news_for_interest(interest: str, num_results: int = 5) -> List[NewsArticle]:
-    """
-    Fetch news articles for a specific interest using RSS feeds.
-    Uses parallel processing for efficiency.
-    """
-    # Find relevant RSS feeds
-    feed_urls = find_feeds_for_interest(interest)
+@app.get("/auth/me", response_model=UserProfile)
+async def get_profile(current_user: Dict = Depends(get_current_user)):
+    """Get current user profile"""
+    return UserProfile(
+        id=current_user["id"],
+        email=current_user["email"],
+        age=current_user["age"],
+        goals=current_user["goals"],
+        interests=current_user["interests"],
+        k=current_user["k"]
+    )
+
+@app.put("/auth/profile", response_model=UserProfile)
+async def update_profile(
+    profile_data: UpdateProfile,
+    current_user: Dict = Depends(get_current_user)
+):
+    """Update user profile"""
+    updates = {}
+    if profile_data.age is not None:
+        updates["age"] = profile_data.age
+    if profile_data.goals is not None:
+        updates["goals"] = profile_data.goals
+    if profile_data.interests is not None:
+        updates["interests"] = profile_data.interests
+    if profile_data.k is not None:
+        updates["k"] = profile_data.k
     
-    # Fetch entries from all feeds in parallel
-    all_entries = []
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        future_to_feed = {executor.submit(fetch_rss_entries, url, 5): url for url in feed_urls}
-        
-        for future in as_completed(future_to_feed):
-            try:
-                entries = future.result()
-                all_entries.extend(entries)
-            except Exception as e:
-                print(f"Error in feed fetch: {str(e)}")
+    updated_user = FirestoreUser.update(current_user["id"], updates)
     
-    # Limit to requested number
-    all_entries = all_entries[:num_results * 2]  # Get extra in case some fail
-    
-    # Process articles in parallel
-    articles = []
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        future_to_entry = {executor.submit(process_single_article, entry): entry for entry in all_entries}
-        
-        for future in as_completed(future_to_entry):
-            try:
-                article = future.result()
-                if article:
-                    articles.append(article)
-                    if len(articles) >= num_results:
-                        break
-            except Exception as e:
-                print(f"Error in article processing: {str(e)}")
-    
-    return articles[:num_results]
+    return UserProfile(
+        id=updated_user["id"],
+        email=updated_user["email"],
+        age=updated_user["age"],
+        goals=updated_user["goals"],
+        interests=updated_user["interests"],
+        k=updated_user["k"]
+    )
+
+# ============= NEWS ENDPOINTS =============
 
 @app.post("/recommend-interests", response_model=InterestResponse)
 async def recommend_interests(request: InterestRequest):
@@ -405,7 +287,9 @@ async def get_personalized_news(request: InterestRequest):
             for future in as_completed(future_to_interest):
                 interest = future_to_interest[future]
                 try:
-                    articles = future.result()
+                    articles_data = future.result()
+                    # Convert dicts to NewsArticle objects
+                    articles = [NewsArticle(**article) for article in articles_data]
                     news_by_interest[interest] = articles
                 except Exception as e:
                     print(f"Error fetching news for {interest}: {str(e)}")
@@ -420,6 +304,90 @@ async def get_personalized_news(request: InterestRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+@app.get("/news/feed", response_model=PersonalizedNewsResponse)
+async def get_user_feed(
+    current_user: Dict = Depends(get_current_user),
+    since: Optional[str] = None
+):
+    """
+    Get personalized news feed for authenticated user.
+    Filters out already-read articles.
+    """
+    if not api_key:
+        raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
+    
+    try:
+        # Get user's read articles
+        read_urls = set(FirestoreReadArticle.get_user_read_articles(current_user["id"]))
+        
+        # Step 1: Get top K interests using Gemini
+        client = genai.Client(api_key=api_key)
+        
+        prompt = f"""
+        User Profile:
+        - Age: {current_user["age"]}
+        - Goals: {current_user["goals"]}
+        
+        Interests to evaluate: {current_user["interests"]}
+        
+        Task: Pick the top {current_user["k"]} interests that best align with the user's age and goals.
+        
+        Return ONLY a JSON object in the following format:
+        {{
+            "recommended_interests": ["interest1", "interest2", ...]
+        }}
+        """
+        
+        response = client.models.generate_content(
+            model='gemini-2.0-flash-exp',
+            contents=prompt,
+            config=genai.types.GenerateContentConfig(response_mime_type="application/json")
+        )
+        content = response.text.replace("```json", "").replace("```", "").strip()
+        result = json.loads(content)
+        recommended_interests = result.get("recommended_interests", [])
+        
+        # Step 2: Fetch news for all interests in parallel
+        news_by_interest = {}
+        
+        with ThreadPoolExecutor(max_workers=current_user["k"]) as executor:
+            future_to_interest = {
+                executor.submit(fetch_news_for_interest, interest, 10): interest 
+                for interest in recommended_interests
+            }
+            
+            for future in as_completed(future_to_interest):
+                interest = future_to_interest[future]
+                try:
+                    articles_data = future.result()
+                    # Convert dicts to NewsArticle objects and filter read articles
+                    articles = [NewsArticle(**article) for article in articles_data]
+                    unread_articles = [
+                        article for article in articles 
+                        if article.link not in read_urls
+                    ]
+                    news_by_interest[interest] = unread_articles[:5]
+                except Exception as e:
+                    print(f"Error fetching news for {interest}: {str(e)}")
+                    news_by_interest[interest] = []
+        
+        return PersonalizedNewsResponse(
+            recommended_interests=recommended_interests,
+            news_by_interest=news_by_interest
+        )
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+@app.post("/news/mark-read")
+async def mark_article_read(
+    article_url: str,
+    current_user: Dict = Depends(get_current_user)
+):
+    """Mark an article as read"""
+    FirestoreReadArticle.mark_read(current_user["id"], article_url)
+    return {"status": "success", "message": "Article marked as read"}
 
 if __name__ == "__main__":
     import uvicorn
