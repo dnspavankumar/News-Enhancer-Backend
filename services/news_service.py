@@ -83,6 +83,10 @@ RSS_FEEDS = {
         "https://www.lonelyplanet.com/feed",
         "https://www.travelandleisure.com/rss"
     ],
+    "hiking": [
+        "https://www.outsideonline.com/rss/",
+        "https://www.backpacker.com/rss/"
+    ],
     
     # Default fallback
     "general": [
@@ -93,19 +97,6 @@ RSS_FEEDS = {
 
 # Cache for articles (simple in-memory cache)
 article_cache = {}
-
-
-class NewsArticle:
-    """News article data structure"""
-    def __init__(self, title: str, link: str, source: str, snippet: Optional[str] = None,
-                 date: Optional[str] = None, content: Optional[str] = None, image: Optional[str] = None):
-        self.title = title
-        self.link = link
-        self.source = source
-        self.snippet = snippet
-        self.date = date
-        self.content = content
-        self.image = image
 
 
 def get_cache_key(url: str) -> str:
